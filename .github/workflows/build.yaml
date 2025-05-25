@@ -69,7 +69,7 @@ jobs:
           else
             echo "::error::apt-get update failed after $i attempts. Dumping current APT configuration:"
             echo "--- apt-config dump ---"
-            sudo apt-config dump
+            # sudo apt-config dump
             echo "--- /etc/apt/sources.list ---"
             sudo cat /etc/apt/sources.list
             echo "--- /etc/apt/sources.list.d/* ---"
@@ -111,6 +111,7 @@ jobs:
         chmod +x github-release
         sudo mv github-release /usr/local/bin/
         echo "github-release installed: $(github-release -V)"
+        
     - name: Configure ccache
       run: |
         echo "CCACHE_DIR=${{ runner.temp }}/ccache" >> $GITHUB_ENV

@@ -29,7 +29,8 @@ jobs:
         Suites: noble-security
         Components: main restricted universe multiverse
         Signed-By: /usr/share/keyrings/ubuntu-archive-keyring.gpg
-        " >> /etc/apt/sources.list.d/ubuntu.sources
+        " >> ./sources
+        sudo cp -f ./sources /etc/apt/sources.list.d/ubuntu.sources
         sudo dpkg --add-architecture arm64
         sudo apt-get -y update
         sudo apt-get -y install \

@@ -56,27 +56,6 @@ jobs:
     - name: Reset ccache statistics
       run: ccache -z
 
-    - name: Prepare Release Information
-      id: prep_release
-      run: |
-        RELEASE_NUMBER=$((${{ env.RELEASE_START }} + $GITHUB_RUN_NUMBER))
-        echo "RELEASE_NUMBER=${RELEASE_NUMBER}" >> $GITHUB_OUTPUT
-
-        if [ -f "./dev-make" ] && [ ! -x "./dev-make" ]; then chmod +x ./dev-make; fi
-        # Assuming dev.mk is the makefile used by dev-make
-        if [ -f "./dev.mk" ] && [ ! -x "./dev.mk" ]; then chmod +x ./dev.mk; fi
-
-
-        RELEASE_TAG_NAME=$(./dev-make version)
-        echo "RELEASE_TAG_NAME=${RELEASE_TAG_NAME}" >> $GITHUB_OUTPUT
-
-        DEB_INFO_PATTERN=$(./dev-make info)
-        echo "DEB_INFO_PATTERN=${DEB_INFO_PATTERN}" >> $GITHUB_OUTPUT
-
-        echo "Calculated RELEASE_NUMBER: ${RELEASE_NUMBER}"
-        echo "Calculated RELEASE_TAG_NAME: ${RELEASE_TAG_NAME}"
-        echo "Calculated DEB_INFO_PATTERN: ${DEB_INFO_PATTERN}"
-
     - name: Check AArch64 linker and QEMU_LD_PREFIX (for debugging)
       env:
         QEMU_LD_PREFIX: /usr/aarch64-linux-gnu
@@ -115,6 +94,27 @@ jobs:
           ls -la
           exit 1 # Fail early if dev.mk is not found, as it's critical
         fi
+
+    - name: Prepare Release Information
+      id: prep_release
+      run: |
+        RELEASE_NUMBER=$((${{ env.RELEASE_START }} + $GITHUB_RUN_NUMBER))
+        echo "RELEASE_NUMBER=${RELEASE_NUMBER}" >> $GITHUB_OUTPUT
+
+        if [ -f "./dev-make" ] && [ ! -x "./dev-make" ]; then chmod +x ./dev-make; fi
+        # Assuming dev.mk is the makefile used by dev-make
+        if [ -f "./dev.mk" ] && [ ! -x "./dev.mk" ]; then chmod +x ./dev.mk; fi
+
+
+        RELEASE_TAG_NAME=$(./dev-make version)
+        echo "RELEASE_TAG_NAME=${RELEASE_TAG_NAME}" >> $GITHUB_OUTPUT
+
+        DEB_INFO_PATTERN=$(./dev-make info)
+        echo "DEB_INFO_PATTERN=${DEB_INFO_PATTERN}" >> $GITHUB_OUTPUT
+
+        echo "Calculated RELEASE_NUMBER: ${RELEASE_NUMBER}"
+        echo "Calculated RELEASE_TAG_NAME: ${RELEASE_TAG_NAME}"
+        echo "Calculated DEB_INFO_PATTERN: ${DEB_INFO_PATTERN}"
 
     - name: Build package (cross-compiling for aarch64)
       env:

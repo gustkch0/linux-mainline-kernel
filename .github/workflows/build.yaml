@@ -35,23 +35,43 @@ jobs:
           wget \
           xz-utils \
           dwarves
-        sudo echo "
-        Types: deb [arch=arm64]
-        URIs: http://ports.ubuntu.com/ubuntu-ports/
-        Suites: noble noble-updates noble-backports
-        Components: main restricted universe multiverse
-        Signed-By: /usr/share/keyrings/ubuntu-archive-keyring.gpg
-        Architectures: arm64
-        
-        Types: deb [arch=arm64]
-        URIs: http://ports.ubuntu.com/ubuntu-ports/
-        Suites: noble-security
-        Components: main restricted universe multiverse
-        Signed-By: /usr/share/keyrings/ubuntu-archive-keyring.gpg
-        Architectures: arm64
-        
-        " >> ./sources
-        sudo cp -f ./sources /etc/apt/sources.list.d/ubuntu-arm64.sources
+            
+    - name: setup deb822 repos
+      run: |
+           cat <<EOF > deb822sources
+           Types: deb
+           URIs: http://archive.ubuntu.com/ubuntu/
+           Suites: noble
+           Components: main restricted universe
+           Architectures: amd64
+          
+           Types: deb
+           URIs: http://security.ubuntu.com/ubuntu/
+           Suites: noble-security
+           Components: main restricted universe
+           Architectures: amd64
+          
+           Types: deb
+           URIs: http://archive.ubuntu.com/ubuntu/
+           Suites: noble-updates
+           Components: main restricted universe
+           Architectures: amd64
+          
+           Types: deb
+           URIs: http://azure.ports.ubuntu.com/ubuntu-ports/
+           Suites: noble
+           Components: main restricted multiverse universe
+           Architectures: arm64
+          
+           Types: deb
+           URIs: http://azure.ports.ubuntu.com/ubuntu-ports/
+           Suites: noble-updates
+           Components: main restricted multiverse universe
+           Architectures: arm64
+           EOF
+           sudo mv deb822sources /etc/apt/sources.list.d/ubuntu.sources
+    - name: add arm64
+      run: |
         sudo dpkg --add-architecture arm64
         sudo apt update
         sudo apt-get -y --ignore-missing install \

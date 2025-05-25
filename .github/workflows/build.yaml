@@ -15,15 +15,53 @@ jobs:
     - name: Set up QEMU
       uses: docker/setup-qemu-action@v3
 
-    - name: Install build dependencies and github-release
+- name: Install build dependencies and github-release
       run: |
-        # Add arm64 architecture for multiarch support
         sudo dpkg --add-architecture arm64
-        sudo apt-get -y update
 
-        # Install build dependencies
-        # For dependencies required by dpkg-buildpackage for the target (arm64), specify :arm64
-        # For host tools, no :arch qualifier is needed (they'll be amd64)
+        echo "Correcting APT sources for security.ubuntu.com if misconfigured..."
+        # Iterate over main sources file and files in sources.list.d
+        # The `find` command is safer than `grep -lr` if no files match in sources.list.d
+        find /etc/apt/sources.list /etc/apt/sources.list.d/ -type f -name '*.list' 2>/dev/null | while IFS= read -r F_APT_SOURCE; do
+          if grep -q 'security.ubuntu.com' "$F_APT_SOURCE"; then
+            echo "Checking/Fixing $F_APT_SOURCE for incorrect security.ubuntu.com entries..."
+            # Correct lines where security.ubuntu.com incorrectly points to 'noble' instead of 'noble-security'
+            sudo sed -i -E 's#^(deb.*security\.ubuntu\.com/ubuntu[ /]+)noble([ /].*(main|restricted|universe|multiverse).*)#\1noble-security\2#g' "$F_APT_SOURCE"
+            # Correct lines for 'noble-updates' -> 'noble-security' on security.ubuntu.com (less common, but defensive)
+            sudo sed -i -E 's#^(deb.*security\.ubuntu\.com/ubuntu[ /]+)noble-updates([ /].*(main|restricted|universe|multiverse).*)#\1noble-security\2#g' "$F_APT_SOURCE"
+            # Correct lines for 'noble-backports' -> 'noble-security' on security.ubuntu.com (less common, but defensive)
+            sudo sed -i -E 's#^(deb.*security\.ubuntu\.com/ubuntu[ /]+)noble-backports([ /].*(main|restricted|universe|multiverse).*)#\1noble-security\2#g' "$F_APT_SOURCE"
+            
+            echo "--- Content of $F_APT_SOURCE after potential changes: ---"
+            sudo cat "$F_APT_SOURCE"
+            echo "------------------------------------------------------"
+          fi
+        done
+        
+        echo "Attempting apt-get update (with retries)..."
+        for i in 1 2 3; do
+          echo "Attempt $i to update apt lists..."
+          if sudo apt-get -y update; then
+            echo "apt-get update successful."
+            break
+          fi
+          if [ "$i" -lt 3 ]; then
+            echo "apt-get update failed. Retrying in 15 seconds..."
+            sleep 15
+          else
+            echo "::error::apt-get update failed after $i attempts. Dumping current APT configuration:"
+            echo "--- apt-cache policy ---"
+            sudo apt-cache policy
+            echo "--- /etc/apt/sources.list ---"
+            sudo cat /etc/apt/sources.list
+            echo "--- /etc/apt/sources.list.d/* ---"
+            sudo grep -r . /etc/apt/sources.list.d/ || echo "No files in /etc/apt/sources.list.d/"
+            echo "---------------------------------"
+            exit 1
+          fi
+        done
+        
+        echo "Installing dependencies..."
         sudo apt-get -y install \
           crossbuild-essential-arm64 \
           ccache \
@@ -42,8 +80,6 @@ jobs:
           libelf-dev \
           libssl-dev:arm64 \
           libelf-dev:arm64
-          # Native libssl-dev and libelf-dev are also kept in case any host tools need them,
-          # though usually, the :arm64 versions are what dpkg-buildpackage will check for.
 
         echo "Installing github-release..."
         GH_RELEASE_LATEST_URL=$(curl -sL https://api.github.com/repos/github-release/github-release/releases/latest | jq -r '.assets[] | select(.name | test("linux-amd64-github-release.bz2$")) | .browser_download_url')

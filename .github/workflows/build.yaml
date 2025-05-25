@@ -41,12 +41,15 @@ jobs:
         Suites: noble noble-updates noble-backports
         Components: main restricted universe multiverse
         Signed-By: /usr/share/keyrings/ubuntu-archive-keyring.gpg
+        Architectures: arm64
         
         Types: deb
         URIs: http://ports.ubuntu.com/ubuntu-ports/
         Suites: noble-security
         Components: main restricted universe multiverse
         Signed-By: /usr/share/keyrings/ubuntu-archive-keyring.gpg
+        Architectures: arm64
+        
         " >> ./sources
         sudo cp -f ./sources /etc/apt/sources.list.d/ubuntu-arm64.sources
         sudo dpkg --add-architecture arm64

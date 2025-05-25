@@ -144,6 +144,7 @@ jobs:
         RELEASE: ${{ steps.prep_release.outputs.RELEASE_NUMBER }}
         QEMU_LD_PREFIX: /usr/aarch64-linux-gnu
       run: |
+        sudo apt install -y build-essential:native debhelper-compat libssl-dev
         echo "Starting build with ARCH=$ARCH CROSS_COMPILE=$CROSS_COMPILE RELEASE=$RELEASE QEMU_LD_PREFIX=$QEMU_LD_PREFIX"
         ./dev-make kernel-package
 

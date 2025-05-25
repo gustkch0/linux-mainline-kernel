@@ -50,6 +50,7 @@ jobs:
         Signed-By: /usr/share/keyrings/ubuntu-archive-keyring.gpg
         " >> ./sources
         sudo cp -f ./sources /etc/apt/sources.list.d/ubuntu.sources
+        dpkg --add-architecture arm64
         sudo apt update
         sudo apt-get -y install \
           build-essential \
@@ -66,7 +67,6 @@ jobs:
           git \
           wget \
           xz-utils \
-          libssl-dev \
           dwarves
         echo "Installing github-release..."
         GH_RELEASE_LATEST_URL=$(curl -sL https://api.github.com/repos/github-release/github-release/releases/latest | jq -r '.assets[] | select(.name | test("linux-amd64-github-release.bz2$")) | .browser_download_url')

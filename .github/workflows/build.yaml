@@ -17,7 +17,7 @@ jobs:
 
     - name: Install build dependencies and github-release
       run: |
-        echo "
+        sudo echo "
         Types: deb
         URIs: http://ports.ubuntu.com/ubuntu-ports/
         Suites: noble noble-updates noble-backports

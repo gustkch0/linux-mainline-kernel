@@ -11,7 +11,7 @@ KERNEL_VERSION ?= $(shell $(KERNEL_MAKE) -s kernelversion)
 KERNEL_RELEASE ?= $(shell $(KERNEL_MAKE) -s kernelrelease)
 KDEB_PKGVERSION ?= $(KERNEL_VERSION)-$(RELEASE)-ayufan
 
-KERNEL_MAKE ?= make -j$(nproc) \
+KERNEL_MAKE ?= make -j$$(nproc) \
 	ARCH=arm64 \
 	HOSTCC=aarch64-linux-gnu-gcc \
 	CROSS_COMPILE="ccache aarch64-linux-gnu-" \

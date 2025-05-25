@@ -49,8 +49,8 @@ jobs:
         Components: main restricted universe multiverse
         Signed-By: /usr/share/keyrings/ubuntu-archive-keyring.gpg
         " >> ./sources
-        sudo cp -f ./sources /etc/apt/sources.list.d/ubuntu.sources
-        dpkg --add-architecture arm64
+        sudo cp -f ./sources /etc/apt/sources.list.d/ubuntu-arm64.sources
+        sudo dpkg --add-architecture arm64
         sudo apt update
         sudo apt-get -y install \
           build-essential \

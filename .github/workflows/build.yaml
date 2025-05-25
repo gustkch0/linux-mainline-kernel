@@ -2,28 +2,22 @@ on: [push]
 
 env:
   RELEASE_START: 1600 # 1150, as this is latest build by GitLab CI
-  # Define ARCH and CROSS_COMPILE globally or per step as needed
-  # For kernel builds, these are common:
   TARGET_ARCH: arm64
   CROSS_COMPILE_PREFIX: aarch64-linux-gnu-
 
 jobs:
   build:
-    runs-on: ubuntu-latest # Changed to x64 Ubuntu
-    # container: ... removed, tools will be installed on the runner
-
+    runs-on: ubuntu-latest
     steps:
     - name: Checkout
-      uses: actions/checkout@v4 # Use latest checkout action
+      uses: actions/checkout@v4
 
     - name: Set up QEMU
-      uses: docker/setup-qemu-action@v3 # Use latest QEMU action
+      uses: docker/setup-qemu-action@v3
 
     - name: Install build dependencies and github-release
       run: |
         sudo apt-get -y update
-        # Install cross-compiler and common kernel build dependencies
-        # Add any other specific dependencies your './dev-make kernel-package' might need
         sudo apt-get -y install \
           crossbuild-essential-arm64 \
           ccache \
@@ -39,12 +33,8 @@ jobs:
           git \
           wget \
           xz-utils \
-          dwarves
-          # Add dwarves for BTF generation if your kernel needs it (often does for modern kernels)
-          # On Ubuntu 22.04+, 'dwarves' package should provide 'pahole'
+          dwarves # pahole is part of dwarves on modern Ubuntu
 
-        
-        # Install github-release tool
         echo "Installing github-release..."
         GH_RELEASE_LATEST_URL=$(curl -sL https://api.github.com/repos/github-release/github-release/releases/latest | jq -r '.assets[] | select(.name | test("linux-amd64-github-release.bz2$")) | .browser_download_url')
         if [ -z "$GH_RELEASE_LATEST_URL" ]; then
@@ -59,12 +49,12 @@ jobs:
     - name: Configure ccache
       run: |
         echo "CCACHE_DIR=${{ runner.temp }}/ccache" >> $GITHUB_ENV
-        echo "PATH=/usr/lib/ccache:$PATH" >> $GITHUB_ENV
-        ccache -M 10G # Set a reasonable max cache size
+        echo "PATH=/usr/lib/ccache:$PATH" >> $GITHUB_ENV # Ensure ccache is in PATH
+        ccache -M 10G
         ccache -o compression=true
 
     - name: Reset ccache statistics
-      run: ccache -z # Resets statistics
+      run: ccache -z
 
     - name: Prepare Release Information
       id: prep_release
@@ -72,8 +62,6 @@ jobs:
         RELEASE_NUMBER=$((${{ env.RELEASE_START }} + $GITHUB_RUN_NUMBER))
         echo "RELEASE_NUMBER=${RELEASE_NUMBER}" >> $GITHUB_OUTPUT
 
-        # Assuming ./dev-make is executable and in the root
-        # Ensure ./dev-make is executable if it's a script from your repo
         if [ -f "./dev-make" ] && [ ! -x "./dev-make" ]; then chmod +x ./dev-make; fi
 
         RELEASE_TAG_NAME=$(./dev-make version)
@@ -88,14 +76,17 @@ jobs:
 
     - name: Build package (cross-compiling for aarch64)
       env:
-        # Pass cross-compilation variables to the build script environment
         ARCH: ${{ env.TARGET_ARCH }}
         CROSS_COMPILE: ${{ env.CROSS_COMPILE_PREFIX }}
-        # Make the calculated release number available if dev-make uses it
         RELEASE: ${{ steps.prep_release.outputs.RELEASE_NUMBER }}
+        # Add QEMU_LD_PREFIX here
+        QEMU_LD_PREFIX: /usr/aarch64-linux-gnu
       run: |
-        echo "Starting build with ARCH=$ARCH CROSS_COMPILE=$CROSS_COMPILE RELEASE=$RELEASE"
+        echo "Starting build with ARCH=$ARCH CROSS_COMPILE=$CROSS_COMPILE RELEASE=$RELEASE QEMU_LD_PREFIX=$QEMU_LD_PREFIX"
         # The ./dev-make script must be capable of handling these cross-compilation env vars
+        # The kernel build system will try to run some host tools.
+        # If these host tools (like fixdep) are compiled for arm64 (due to ARCH/CROSS_COMPILE),
+        # QEMU will be invoked to run them. QEMU_LD_PREFIX tells QEMU where to find arm64 libs.
         ./dev-make kernel-package
 
     - name: Display ccache statistics
@@ -104,13 +95,12 @@ jobs:
     - name: Release package
       env:
         GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        # Use outputs from the prep_release step
         RELEASE_TAG_NAME: ${{ steps.prep_release.outputs.RELEASE_TAG_NAME }}
         DEB_INFO_PATTERN: ${{ steps.prep_release.outputs.DEB_INFO_PATTERN }}
       run: |
-        set -x # Enable verbose output for debugging this step
+        set -x 
 
-        RELEASE_TITLE="${RELEASE_TAG_NAME}" # Assuming title is same as tag name
+        RELEASE_TITLE="${RELEASE_TAG_NAME}"
         DESCRIPTION_TEXT="$GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID"
 
         echo "Creating draft release: ${RELEASE_TAG_NAME}"
@@ -124,11 +114,10 @@ jobs:
         echo "Sleeping for 3s to allow release to be created..."
         sleep 3s
 
-        DEB_FILES_PATH="../" # Assuming .deb files are in the parent directory
+        DEB_FILES_PATH="../" 
         DEB_PATTERN="*${DEB_INFO_PATTERN}*.deb"
         
         echo "Looking for deb files in ${DEB_FILES_PATH} matching ${DEB_PATTERN}"
-        # Ensure globbing doesn't fail if no files are found
         shopt -s nullglob
         DEB_FILES=(${DEB_FILES_PATH}${DEB_PATTERN})
         shopt -u nullglob
@@ -152,7 +141,6 @@ jobs:
           --tag "${RELEASE_TAG_NAME}" \
           --name "${RELEASE_TITLE}" \
           --description "${DESCRIPTION_TEXT}"
-          # No --draft flag here, so it un-drafts it
 
         if [ ${#DEB_FILES[@]} -gt 0 ]; then
           echo "Removing uploaded .deb files from build workspace..."

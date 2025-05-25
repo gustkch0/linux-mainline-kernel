@@ -17,6 +17,19 @@ jobs:
 
     - name: Install build dependencies and github-release
       run: |
+        echo "
+        Types: deb
+        URIs: http://ports.ubuntu.com/ubuntu-ports/
+        Suites: noble noble-updates noble-backports
+        Components: main restricted universe multiverse
+        Signed-By: /usr/share/keyrings/ubuntu-archive-keyring.gpg
+        
+        Types: deb
+        URIs: http://ports.ubuntu.com/ubuntu-ports/
+        Suites: noble-security
+        Components: main restricted universe multiverse
+        Signed-By: /usr/share/keyrings/ubuntu-archive-keyring.gpg
+        " >> /etc/apt/sources.list.d/ubuntu.sources
         sudo dpkg --add-architecture arm64
         sudo apt-get -y update
         sudo apt-get -y install \

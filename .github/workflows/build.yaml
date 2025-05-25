@@ -15,7 +15,7 @@ jobs:
     - name: Set up QEMU
       uses: docker/setup-qemu-action@v3
 
-- name: Install build dependencies and github-release
+    - name: Install build dependencies and github-release
       run: |
         sudo dpkg --add-architecture arm64
 

@@ -2,66 +2,158 @@ on: [push]
 
 env:
   RELEASE_START: 1600 # 1150, as this is latest build by GitLab CI
+  # Define ARCH and CROSS_COMPILE globally or per step as needed
+  # For kernel builds, these are common:
+  TARGET_ARCH: arm64
+  CROSS_COMPILE_PREFIX: aarch64-linux-gnu-
 
 jobs:
   build:
-    runs-on: [self-hosted, Linux, ARM64]
-    container: ayufan/rock64-dockerfiles:bookworm
+    runs-on: ubuntu-latest # Changed to x64 Ubuntu
+    # container: ... removed, tools will be installed on the runner
+
     steps:
     - name: Checkout
-      uses: actions/checkout@v3
-    - name: Install Docker binary
-      run: |
-        apt-get -y update
-        apt-get -y install docker.io
+      uses: actions/checkout@v4 # Use latest checkout action
+
     - name: Set up QEMU
-      uses: docker/setup-qemu-action@v2
+      uses: docker/setup-qemu-action@v3 # Use latest QEMU action
+
+    - name: Install build dependencies and github-release
+      run: |
+        sudo apt-get -y update
+        # Install cross-compiler and common kernel build dependencies
+        # Add any other specific dependencies your './dev-make kernel-package' might need
+        sudo apt-get -y install \
+          crossbuild-essential-arm64 \
+          ccache \
+          bc \
+          libssl-dev \
+          bison \
+          flex \
+          libelf-dev \
+          kmod \
+          curl \
+          jq \
+          rsync \
+          git \
+          wget \
+          xz-utils \
+          # Add dwarves for BTF generation if your kernel needs it (often does for modern kernels)
+          # On Ubuntu 22.04+, 'dwarves' package should provide 'pahole'
+          dwarves
+        
+        # Install github-release tool
+        echo "Installing github-release..."
+        GH_RELEASE_LATEST_URL=$(curl -sL https://api.github.com/repos/github-release/github-release/releases/latest | jq -r '.assets[] | select(.name | test("linux-amd64-github-release.bz2$")) | .browser_download_url')
+        if [ -z "$GH_RELEASE_LATEST_URL" ]; then
+          echo "Failed to get github-release download URL"
+          exit 1
+        fi
+        curl -sL "$GH_RELEASE_LATEST_URL" | bzcat > github-release
+        chmod +x github-release
+        sudo mv github-release /usr/local/bin/
+        echo "github-release installed: $(github-release -V)"
+
     - name: Configure ccache
       run: |
-        echo "CCACHE_DIR=$RUNNER_TEMP/ccache" >> $GITHUB_ENV
+        echo "CCACHE_DIR=${{ runner.temp }}/ccache" >> $GITHUB_ENV
         echo "PATH=/usr/lib/ccache:$PATH" >> $GITHUB_ENV
+        ccache -M 10G # Set a reasonable max cache size
+        ccache -o compression=true
+
     - name: Reset ccache statistics
-      run: ccache -M 0 -F 0
-    - name: Build package
+      run: ccache -z # Resets statistics
+
+    - name: Prepare Release Information
+      id: prep_release
       run: |
-        export RELEASE=$(($RELEASE_START+$GITHUB_RUN_NUMBER))
+        RELEASE_NUMBER=$((${{ env.RELEASE_START }} + $GITHUB_RUN_NUMBER))
+        echo "RELEASE_NUMBER=${RELEASE_NUMBER}" >> $GITHUB_OUTPUT
+
+        # Assuming ./dev-make is executable and in the root
+        # Ensure ./dev-make is executable if it's a script from your repo
+        if [ -f "./dev-make" ] && [ ! -x "./dev-make" ]; then chmod +x ./dev-make; fi
+
+        RELEASE_TAG_NAME=$(./dev-make version)
+        echo "RELEASE_TAG_NAME=${RELEASE_TAG_NAME}" >> $GITHUB_OUTPUT
+
+        DEB_INFO_PATTERN=$(./dev-make info)
+        echo "DEB_INFO_PATTERN=${DEB_INFO_PATTERN}" >> $GITHUB_OUTPUT
+
+        echo "Calculated RELEASE_NUMBER: ${RELEASE_NUMBER}"
+        echo "Calculated RELEASE_TAG_NAME: ${RELEASE_TAG_NAME}"
+        echo "Calculated DEB_INFO_PATTERN: ${DEB_INFO_PATTERN}"
+
+    - name: Build package (cross-compiling for aarch64)
+      env:
+        # Pass cross-compilation variables to the build script environment
+        ARCH: ${{ env.TARGET_ARCH }}
+        CROSS_COMPILE: ${{ env.CROSS_COMPILE_PREFIX }}
+        # Make the calculated release number available if dev-make uses it
+        RELEASE: ${{ steps.prep_release.outputs.RELEASE_NUMBER }}
+      run: |
+        echo "Starting build with ARCH=$ARCH CROSS_COMPILE=$CROSS_COMPILE RELEASE=$RELEASE"
+        # The ./dev-make script must be capable of handling these cross-compilation env vars
         ./dev-make kernel-package
+
+    - name: Display ccache statistics
+      run: ccache -s
+
     - name: Release package
       env:
         GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        # Use outputs from the prep_release step
+        RELEASE_TAG_NAME: ${{ steps.prep_release.outputs.RELEASE_TAG_NAME }}
+        DEB_INFO_PATTERN: ${{ steps.prep_release.outputs.DEB_INFO_PATTERN }}
       run: |
-        set -x
+        set -x # Enable verbose output for debugging this step
 
-        export RELEASE=$(($RELEASE_START+$GITHUB_RUN_NUMBER))
-        export RELEASE_NAME="$(./dev-make version)"
-        export RELEASE_TITLE="$(./dev-make version)"
-        export DESCRIPTION="$GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID"
+        RELEASE_TITLE="${RELEASE_TAG_NAME}" # Assuming title is same as tag name
+        DESCRIPTION_TEXT="$GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID"
 
+        echo "Creating draft release: ${RELEASE_TAG_NAME}"
         github-release release \
-          --tag "${RELEASE_NAME}" \
+          --tag "${RELEASE_TAG_NAME}" \
           --name "${RELEASE_TITLE}" \
-          --user "${GITHUB_REPOSITORY%/*}" \
-          --repo "${GITHUB_REPOSITORY#*/}" \
-          --description "${DESCRIPTION}" \
+          --description "${DESCRIPTION_TEXT}" \
           --target "${GITHUB_SHA}" \
           --draft
 
-        sleep 3s # allow to update release
+        echo "Sleeping for 3s to allow release to be created..."
+        sleep 3s
 
-        for i in ../*$(./dev-make info)*.deb; do
-          github-release upload \
-            --tag "${RELEASE_NAME}" \
-            --name "$(basename "${i}")" \
-            --user "${GITHUB_REPOSITORY%/*}" \
-            --repo "${GITHUB_REPOSITORY#*/}" \
-            --file "${i}"
-        done
+        DEB_FILES_PATH="../" # Assuming .deb files are in the parent directory
+        DEB_PATTERN="*${DEB_INFO_PATTERN}*.deb"
+        
+        echo "Looking for deb files in ${DEB_FILES_PATH} matching ${DEB_PATTERN}"
+        # Ensure globbing doesn't fail if no files are found
+        shopt -s nullglob
+        DEB_FILES=(${DEB_FILES_PATH}${DEB_PATTERN})
+        shopt -u nullglob
 
+        if [ ${#DEB_FILES[@]} -eq 0 ]; then
+          echo "Warning: No .deb files found matching pattern '${DEB_FILES_PATH}${DEB_PATTERN}'"
+        else
+          echo "Found .deb files:"
+          printf " - %s\n" "${DEB_FILES[@]}"
+          for i in "${DEB_FILES[@]}"; do
+            echo "Uploading $(basename "${i}")..."
+            github-release upload \
+              --tag "${RELEASE_TAG_NAME}" \
+              --name "$(basename "${i}")" \
+              --file "${i}"
+          done
+        fi
+
+        echo "Finalizing release (removing draft status)..."
         github-release edit \
-          --tag "${RELEASE_NAME}" \
+          --tag "${RELEASE_TAG_NAME}" \
           --name "${RELEASE_TITLE}" \
-          --user "${GITHUB_REPOSITORY%/*}" \
-          --repo "${GITHUB_REPOSITORY#*/}" \
-          --description "${DESCRIPTION}"
+          --description "${DESCRIPTION_TEXT}"
+          # No --draft flag here, so it un-drafts it
 
-        rm ../*$(./dev-make info)*.deb
+        if [ ${#DEB_FILES[@]} -gt 0 ]; then
+          echo "Removing uploaded .deb files from build workspace..."
+          rm -f "${DEB_FILES[@]}"
+        fi

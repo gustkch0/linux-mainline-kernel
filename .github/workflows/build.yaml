@@ -36,14 +36,14 @@ jobs:
           xz-utils \
           dwarves
         sudo echo "
-        Types: deb
+        Types: deb [arch=arm64]
         URIs: http://ports.ubuntu.com/ubuntu-ports/
         Suites: noble noble-updates noble-backports
         Components: main restricted universe multiverse
         Signed-By: /usr/share/keyrings/ubuntu-archive-keyring.gpg
         Architectures: arm64
         
-        Types: deb
+        Types: deb [arch=arm64]
         URIs: http://ports.ubuntu.com/ubuntu-ports/
         Suites: noble-security
         Components: main restricted universe multiverse

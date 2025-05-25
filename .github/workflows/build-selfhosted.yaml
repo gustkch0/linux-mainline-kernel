@@ -1,0 +1,256 @@
+on: [push]
+
+env:
+  RELEASE_START: 1700
+  TARGET_ARCH: arm64
+  CROSS_COMPILE_PREFIX: aarch64-linux-gnu-
+
+jobs:
+  build:
+    runs-on: self-hosted
+    steps:
+    - name: Checkout
+      uses: actions/checkout@v4
+
+    - name: Set up QEMU
+      uses: docker/setup-qemu-action@v3
+
+    - name: Install build dependencies and github-release
+      run: |
+        sudo apt-get -y update
+        sudo apt-get -y install \
+          build-essential \
+          crossbuild-essential-arm64 \
+          ccache \
+          bc \
+          libssl-dev \
+          bison \
+          flex \
+          libelf-dev \
+          kmod \
+          curl \
+          jq \
+          rsync \
+          git \
+          wget \
+          xz-utils \
+          dwarves
+            
+    - name: setup deb822 repos
+      run: |
+           cat <<EOF > deb822sources
+           Types: deb
+           URIs: http://archive.ubuntu.com/ubuntu/
+           Suites: noble
+           Components: main restricted universe
+           Architectures: amd64
+          
+           Types: deb
+           URIs: http://security.ubuntu.com/ubuntu/
+           Suites: noble-security
+           Components: main restricted universe
+           Architectures: amd64
+          
+           Types: deb
+           URIs: http://archive.ubuntu.com/ubuntu/
+           Suites: noble-updates
+           Components: main restricted universe
+           Architectures: amd64
+          
+           Types: deb
+           URIs: http://azure.ports.ubuntu.com/ubuntu-ports/
+           Suites: noble
+           Components: main restricted multiverse universe
+           Architectures: arm64
+          
+           Types: deb
+           URIs: http://azure.ports.ubuntu.com/ubuntu-ports/
+           Suites: noble-updates
+           Components: main restricted multiverse universe
+           Architectures: arm64
+           EOF
+           sudo mv deb822sources /etc/apt/sources.list.d/ubuntu.sources
+    - name: add arm64
+      run: |
+        sudo dpkg --add-architecture arm64
+        sudo apt update
+        sudo apt-get -y --ignore-missing install \
+          libssl-dev:arm64 \
+          libelf-dev:arm64
+        echo "Installing github-release..."
+        GH_RELEASE_LATEST_URL=$(curl -sL https://api.github.com/repos/github-release/github-release/releases/latest | jq -r '.assets[] | select(.name | test("linux-amd64-github-release.bz2$")) | .browser_download_url')
+        if [ -z "$GH_RELEASE_LATEST_URL" ]; then
+          echo "Failed to get github-release download URL"
+          exit 1
+        fi
+        curl -sL "$GH_RELEASE_LATEST_URL" | bzcat > github-release
+        chmod +x github-release
+        sudo mv github-release /usr/local/bin/
+        echo "github-release installed: $(github-release -V)"
+    - name: Configure ccache
+      run: |
+        echo "CCACHE_DIR=${{ runner.temp }}/ccache" >> $GITHUB_ENV
+        echo "PATH=/usr/lib/ccache:$PATH" >> $GITHUB_ENV
+        ccache -M 10G
+        ccache -o compression=true
+    - name: Reset ccache statistics
+      run: ccache -z
+
+    # MOVED THIS STEP UP: Patch dev.mk *before* it's used by 'Prepare Release Information'
+    - name: Patch dev.mk to use correct HOSTCC
+      run: |
+        if [ -f "dev.mk" ]; then
+          echo "Attempting to patch dev.mk to set HOSTCC=gcc for KERNEL_MAKE..."
+          # This sed command targets the HOSTCC line within the KERNEL_MAKE definition.
+          if sed -i 's|^\(\s*HOSTCC=\)aarch64-linux-gnu-gcc\(.*\)|\1gcc\2|' dev.mk; then
+            echo "Successfully patched dev.mk. Verifying patch:"
+            grep "HOSTCC=" dev.mk || echo "HOSTCC line not found after patch."
+          else
+            echo "sed command failed to patch dev.mk. Build might fail."
+          fi
+          echo "--- Patched dev.mk content (relevant part) ---"
+          grep -A 4 -B 4 "KERNEL_MAKE" dev.mk || cat dev.mk
+          echo "--- End Patched dev.mk content ---"
+        else
+          echo "dev.mk not found in the current directory ($(pwd)), skipping patch."
+          # If dev.mk is critical and not found, you might want to fail here:
+          # exit 1
+        fi
+    - name: Prepare Release Information
+      id: prep_release
+      run: |
+        RELEASE_NUMBER=$((${{ env.RELEASE_START }} + $GITHUB_RUN_NUMBER))
+        echo "RELEASE_NUMBER=${RELEASE_NUMBER}" >> $GITHUB_OUTPUT
+        if [ -f "./dev-make" ] && [ ! -x "./dev-make" ]; then chmod +x ./dev-make; fi
+        # dev.mk should now be patched if it existed.
+        # Capture RELEASE_TAG_NAME
+        # The 'version' target in dev.mk is: @echo "$(KDEB_PKGVERSION)"
+        # KERNEL_VERSION = $(shell $(KERNEL_MAKE) -s kernelversion)
+        # 'make -s kernelversion' is usually clean.
+        _tag_name_full_output=$(./dev-make version)
+        # Get the last non-empty line
+        _tag_name_value=$(echo "${_tag_name_full_output}" | sed '/^\s*$/d' | tail -n 1)
+        echo "RELEASE_TAG_NAME=${_tag_name_value}" >> $GITHUB_OUTPUT
+        # Capture DEB_INFO_PATTERN
+        # The 'info' target in dev.mk is: @echo $(KERNEL_RELEASE)
+        # KERNEL_RELEASE = $(shell $(KERNEL_MAKE) -s kernelrelease)
+        # This is the one that produced multi-line output.
+        _deb_info_full_output=$(./dev-make info)
+        # Get the last non-empty line
+        _deb_info_value=$(echo "${_deb_info_full_output}" | sed '/^\s*$/d' | tail -n 1)
+        echo "DEB_INFO_PATTERN=${_deb_info_value}" >> $GITHUB_OUTPUT
+        echo "--- Debug: Release Information ---"
+        echo "Calculated RELEASE_NUMBER: ${RELEASE_NUMBER}"
+        echo "Original output from './dev-make version':"
+        echo "${_tag_name_full_output}"
+        echo "Processed RELEASE_TAG_NAME (last non-empty line): ${_tag_name_value}"
+        echo "Original output from './dev-make info':"
+        echo "${_deb_info_full_output}"
+        echo "Processed DEB_INFO_PATTERN (last non-empty line): ${_deb_info_value}"
+        echo "--- End Debug: Release Information ---"
+        # Verify that the values are not empty
+        if [ -z "${_tag_name_value}" ]; then
+          echo "::error::RELEASE_TAG_NAME is empty after processing. Full output was: ${_tag_name_full_output}"
+          exit 1
+        fi
+        if [ -z "${_deb_info_value}" ]; then
+          echo "::error::DEB_INFO_PATTERN is empty after processing. Full output was: ${_deb_info_full_output}"
+          exit 1
+        fi
+    - name: Check AArch64 linker and QEMU_LD_PREFIX (for debugging)
+      env:
+        QEMU_LD_PREFIX: /usr/aarch64-linux-gnu
+      run: |
+        echo "--- Debug Information ---"
+        echo "QEMU_LD_PREFIX is set to: $QEMU_LD_PREFIX"
+        if [ -f "$QEMU_LD_PREFIX/lib/ld-linux-aarch64.so.1" ]; then
+          echo "Found linker: $QEMU_LD_PREFIX/lib/ld-linux-aarch64.so.1"
+        else
+          echo "Linker NOT FOUND at $QEMU_LD_PREFIX/lib/ld-linux-aarch64.so.1"
+        fi
+        echo "--- End Debug Information ---"
+    - name: Build package (cross-compiling for aarch64)
+      env:
+        ARCH: ${{ env.TARGET_ARCH }}
+        CROSS_COMPILE: ${{ env.CROSS_COMPILE_PREFIX }}
+        RELEASE: ${{ steps.prep_release.outputs.RELEASE_NUMBER }}
+        QEMU_LD_PREFIX: /usr/aarch64-linux-gnu
+      run: |
+        sudo apt install -y build-essential:native debhelper-compat libssl-dev
+        echo "Starting build with ARCH=$ARCH CROSS_COMPILE=$CROSS_COMPILE RELEASE=$RELEASE QEMU_LD_PREFIX=$QEMU_LD_PREFIX"
+        ./dev-make kernel-package
+    - name: Display ccache statistics
+      run: ccache -s
+      
+    - name: Build package
+      env:
+        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        RELEASE: ${{ steps.prep_release.outputs.RELEASE_TAG_NAME }}
+      run: |
+        sudo apt install debhelper -y
+        git config --global --add safe.directory "/__w/linux-mainline-kernel/linux-mainline-kernel"
+        git config --global --add safe.directory "/__w/linux-rockchip/linux-rockchip"        
+        export RELEASE=$(($RELEASE_START+$GITHUB_RUN_NUMBER))
+        ./dev-make kernel-package
+        export RELEASE_NAME="$(./dev-make version)"
+        export RELEASE_TITLE="$(./dev-make version)"
+        export DESCRIPTION="$GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID"
+        find / -type f -name "*.deb" > deb
+        export DEB=$(cat deb)
+        echo $RELEASE
+        echo $RELEASE_TITLE
+        echo $RELEASE_NAME
+        gh release create --title $RELEASE_TITLE --generate-notes -R https://github.com/gustkch0/linux-mainline-kernel $RELEASE $DEB
+        
+    - name: Upload Artifact
+      uses: actions/upload-artifact@v4
+      with:
+        name: .deb files
+        path: ./*.deb
+    - name: Release package
+      env:
+        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        RELEASE_TAG_NAME: ${{ steps.prep_release.outputs.RELEASE_TAG_NAME }}
+        DEB_INFO_PATTERN: ${{ steps.prep_release.outputs.DEB_INFO_PATTERN }}
+      run: |
+        set -x 
+        RELEASE_TITLE="${RELEASE_TAG_NAME}"
+        DESCRIPTION_TEXT="$GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID"
+        echo "Creating draft release: ${RELEASE_TAG_NAME}"
+        github-release release \
+          --tag "${RELEASE_TAG_NAME}" \
+          --name "${RELEASE_TITLE}" \
+          --description "${DESCRIPTION_TEXT}" \
+          --target "${GITHUB_SHA}" \
+          --draft
+        echo "Sleeping for 3s to allow release to be created..."
+        sleep 3s
+        DEB_FILES_PATH="../" 
+        DEB_PATTERN="*${DEB_INFO_PATTERN}*.deb"
+        
+        echo "Looking for deb files in ${DEB_FILES_PATH} matching ${DEB_PATTERN}"
+        shopt -s nullglob
+        DEB_FILES=(${DEB_FILES_PATH}${DEB_PATTERN})
+        shopt -u nullglob
+        if [ ${#DEB_FILES[@]} -eq 0 ]; then
+          echo "Warning: No .deb files found matching pattern '${DEB_FILES_PATH}${DEB_PATTERN}'"
+        else
+          echo "Found .deb files:"
+          printf " - %s\n" "${DEB_FILES[@]}"
+          for i in "${DEB_FILES[@]}"; do
+            echo "Uploading $(basename "${i}")..."
+            github-release upload \
+              --tag "${RELEASE_TAG_NAME}" \
+              --name "$(basename "${i}")" \
+              --file "${i}"
+          done
+        fi
+        echo "Finalizing release (removing draft status)..."
+        github-release edit \
+          --tag "${RELEASE_TAG_NAME}" \
+          --name "${RELEASE_TITLE}" \
+          --description "${DESCRIPTION_TEXT}"
+        if [ ${#DEB_FILES[@]} -gt 0 ]; then
+          echo "Removing uploaded .deb files from build workspace..."
+          rm -f "${DEB_FILES[@]}"
+        fi

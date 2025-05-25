@@ -1,7 +1,7 @@
 on: [push]
 
 env:
-  RELEASE_START: 1600
+  RELEASE_START: 1650
   TARGET_ARCH: arm64
   CROSS_COMPILE_PREFIX: aarch64-linux-gnu-
 
@@ -17,77 +17,15 @@ jobs:
 
     - name: Install build dependencies and github-release
       run: |
-        sudo dpkg --add-architecture arm64
-        
-        echo "--- Original /etc/apt/sources.list ---"
-        sudo cat /etc/apt/sources.list
-        echo "--- Original /etc/apt/sources.list.d/* ---"
-        sudo find /etc/apt/sources.list.d/ -type f -name '*.list' -name '*.sources' -exec echo "--- Contents of {} ---" \; -exec sudo cat {} \; || echo "No files in /etc/apt/sources.list.d/"
-        echo "--------------------------------------"
-
-        # Add specific sources for arm64 to a new file
-        # We will use ports.ubuntu.com, which is designed for non-x86 architectures.
-        # This avoids interfering with the default amd64 sources.
-        ARM64_SOURCES_FILE="/etc/apt/sources.list.d/arm64-sources.list"
-        DIST="noble" # Ubuntu 24.04 codename
-        COMPONENTS="main restricted universe multiverse"
-        ARM64_URL="http://ports.ubuntu.com/ubuntu-ports/"
-
-        echo "Adding arm64 specific sources to ${ARM64_SOURCES_FILE}..."
-        {
-          echo "# arm64 specific sources for Ubuntu ${DIST}"
-          echo "deb [arch=arm64] ${ARM64_URL} ${DIST} ${COMPONENTS}"
-          echo "deb [arch=arm64] ${ARM64_URL} ${DIST}-updates ${COMPONENTS}"
-          echo "deb [arch=arm64] ${ARM64_URL} ${DIST}-backports ${COMPONENTS}"
-          echo "deb [arch=arm64] ${ARM64_URL} ${DIST}-security ${COMPONENTS}"
-        } | sudo tee "${ARM64_SOURCES_FILE}" > /dev/null
-
-        echo "--- Contents of ${ARM64_SOURCES_FILE} ---"
-        sudo cat "${ARM64_SOURCES_FILE}"
-        echo "-----------------------------------------"
-
-        # Clean apt lists thoroughly
-        echo "Cleaning apt lists..."
-        sudo rm -rf /var/lib/apt/lists/*
-        
-        echo "Attempting apt-get update (with retries and debug)..."
-        for i in 1 2 3; do
-          echo "Attempt $i to update apt lists..."
-          if sudo apt-get \
-            -o Debug::Acquire::http=true \
-            -o Debug::Acquire::https=true \
-            -o Debug::pkgAcquire::Worker=true \
-            -o Debug::Hashs=true \
-            -o Acquire::AllowInsecureRepositories=true \
-            -y update; then
-            echo "apt-get update successful."
-            break
-          fi
-          if [ "$i" -lt 3 ]; then
-            echo "apt-get update failed on attempt $i. Retrying in 15 seconds..."
-            sleep 15
-          else
-            echo "::error::apt-get update failed after $i attempts. Dumping current APT configuration:"
-            echo "--- apt-config dump ---"
-            # sudo apt-config dump
-            echo "--- /etc/apt/sources.list ---"
-            sudo cat /etc/apt/sources.list
-            echo "--- /etc/apt/sources.list.d/* ---"
-            sudo find /etc/apt/sources.list.d/ -type f -name '*.list' -name '*.sources' -exec echo "--- Contents of {} ---" \; -exec sudo cat {} \; || echo "No files in /etc/apt/sources.list.d/"
-            echo "---------------------------------"
-            exit 1
-          fi
-        done
-        
-        echo "Installing dependencies..."
-        # Add Acquire::Retries for robustness during package installation
-        # Also be very explicit about installing for arm64 where needed
-        sudo apt-get -o Acquire::Retries=3 -y install \
+        sudo apt-get -y update
+        sudo apt-get -y install \
           crossbuild-essential-arm64 \
           ccache \
           bc \
+          libssl-dev \
           bison \
           flex \
+          libelf-dev \
           kmod \
           curl \
           jq \
@@ -95,12 +33,9 @@ jobs:
           git \
           wget \
           xz-utils \
-          dwarves \
           libssl-dev \
-          libelf-dev \
           libssl-dev:arm64 \
-          libelf-dev:arm64
-
+          dwarves
         echo "Installing github-release..."
         GH_RELEASE_LATEST_URL=$(curl -sL https://api.github.com/repos/github-release/github-release/releases/latest | jq -r '.assets[] | select(.name | test("linux-amd64-github-release.bz2$")) | .browser_download_url')
         if [ -z "$GH_RELEASE_LATEST_URL" ]; then
@@ -111,47 +46,58 @@ jobs:
         chmod +x github-release
         sudo mv github-release /usr/local/bin/
         echo "github-release installed: $(github-release -V)"
-        
     - name: Configure ccache
       run: |
         echo "CCACHE_DIR=${{ runner.temp }}/ccache" >> $GITHUB_ENV
         echo "PATH=/usr/lib/ccache:$PATH" >> $GITHUB_ENV
         ccache -M 10G
         ccache -o compression=true
-
     - name: Reset ccache statistics
       run: ccache -z
 
+    # MOVED THIS STEP UP: Patch dev.mk *before* it's used by 'Prepare Release Information'
     - name: Patch dev.mk to use correct HOSTCC
       run: |
         if [ -f "dev.mk" ]; then
           echo "Attempting to patch dev.mk to set HOSTCC=gcc for KERNEL_MAKE..."
+          # This sed command targets the HOSTCC line within the KERNEL_MAKE definition.
           if sed -i 's|^\(\s*HOSTCC=\)aarch64-linux-gnu-gcc\(.*\)|\1gcc\2|' dev.mk; then
             echo "Successfully patched dev.mk. Verifying patch:"
             grep "HOSTCC=" dev.mk || echo "HOSTCC line not found after patch."
           else
             echo "sed command failed to patch dev.mk. Build might fail."
           fi
+          echo "--- Patched dev.mk content (relevant part) ---"
+          grep -A 4 -B 4 "KERNEL_MAKE" dev.mk || cat dev.mk
+          echo "--- End Patched dev.mk content ---"
         else
           echo "dev.mk not found in the current directory ($(pwd)), skipping patch."
+          # If dev.mk is critical and not found, you might want to fail here:
+          # exit 1
         fi
-
     - name: Prepare Release Information
       id: prep_release
       run: |
         RELEASE_NUMBER=$((${{ env.RELEASE_START }} + $GITHUB_RUN_NUMBER))
         echo "RELEASE_NUMBER=${RELEASE_NUMBER}" >> $GITHUB_OUTPUT
-
         if [ -f "./dev-make" ] && [ ! -x "./dev-make" ]; then chmod +x ./dev-make; fi
-
+        # dev.mk should now be patched if it existed.
+        # Capture RELEASE_TAG_NAME
+        # The 'version' target in dev.mk is: @echo "$(KDEB_PKGVERSION)"
+        # KERNEL_VERSION = $(shell $(KERNEL_MAKE) -s kernelversion)
+        # 'make -s kernelversion' is usually clean.
         _tag_name_full_output=$(./dev-make version)
+        # Get the last non-empty line
         _tag_name_value=$(echo "${_tag_name_full_output}" | sed '/^\s*$/d' | tail -n 1)
         echo "RELEASE_TAG_NAME=${_tag_name_value}" >> $GITHUB_OUTPUT
-
+        # Capture DEB_INFO_PATTERN
+        # The 'info' target in dev.mk is: @echo $(KERNEL_RELEASE)
+        # KERNEL_RELEASE = $(shell $(KERNEL_MAKE) -s kernelrelease)
+        # This is the one that produced multi-line output.
         _deb_info_full_output=$(./dev-make info)
+        # Get the last non-empty line
         _deb_info_value=$(echo "${_deb_info_full_output}" | sed '/^\s*$/d' | tail -n 1)
         echo "DEB_INFO_PATTERN=${_deb_info_value}" >> $GITHUB_OUTPUT
-
         echo "--- Debug: Release Information ---"
         echo "Calculated RELEASE_NUMBER: ${RELEASE_NUMBER}"
         echo "Original output from './dev-make version':"
@@ -161,7 +107,7 @@ jobs:
         echo "${_deb_info_full_output}"
         echo "Processed DEB_INFO_PATTERN (last non-empty line): ${_deb_info_value}"
         echo "--- End Debug: Release Information ---"
-
+        # Verify that the values are not empty
         if [ -z "${_tag_name_value}" ]; then
           echo "::error::RELEASE_TAG_NAME is empty after processing. Full output was: ${_tag_name_full_output}"
           exit 1
@@ -170,7 +116,6 @@ jobs:
           echo "::error::DEB_INFO_PATTERN is empty after processing. Full output was: ${_deb_info_full_output}"
           exit 1
         fi
-
     - name: Check AArch64 linker and QEMU_LD_PREFIX (for debugging)
       env:
         QEMU_LD_PREFIX: /usr/aarch64-linux-gnu
@@ -183,7 +128,6 @@ jobs:
           echo "Linker NOT FOUND at $QEMU_LD_PREFIX/lib/ld-linux-aarch64.so.1"
         fi
         echo "--- End Debug Information ---"
-
     - name: Build package (cross-compiling for aarch64)
       env:
         ARCH: ${{ env.TARGET_ARCH }}
@@ -191,9 +135,9 @@ jobs:
         RELEASE: ${{ steps.prep_release.outputs.RELEASE_NUMBER }}
         QEMU_LD_PREFIX: /usr/aarch64-linux-gnu
       run: |
+        sudo apt install -y build-essential:native debhelper-compat libssl-dev
         echo "Starting build with ARCH=$ARCH CROSS_COMPILE=$CROSS_COMPILE RELEASE=$RELEASE QEMU_LD_PREFIX=$QEMU_LD_PREFIX"
         ./dev-make kernel-package
-
     - name: Display ccache statistics
       run: ccache -s
 
@@ -204,10 +148,8 @@ jobs:
         DEB_INFO_PATTERN: ${{ steps.prep_release.outputs.DEB_INFO_PATTERN }}
       run: |
         set -x 
-
         RELEASE_TITLE="${RELEASE_TAG_NAME}"
         DESCRIPTION_TEXT="$GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID"
-
         echo "Creating draft release: ${RELEASE_TAG_NAME}"
         github-release release \
           --tag "${RELEASE_TAG_NAME}" \
@@ -215,10 +157,8 @@ jobs:
           --description "${DESCRIPTION_TEXT}" \
           --target "${GITHUB_SHA}" \
           --draft
-
         echo "Sleeping for 3s to allow release to be created..."
         sleep 3s
-
         DEB_FILES_PATH="../" 
         DEB_PATTERN="*${DEB_INFO_PATTERN}*.deb"
         
@@ -226,7 +166,6 @@ jobs:
         shopt -s nullglob
         DEB_FILES=(${DEB_FILES_PATH}${DEB_PATTERN})
         shopt -u nullglob
-
         if [ ${#DEB_FILES[@]} -eq 0 ]; then
           echo "Warning: No .deb files found matching pattern '${DEB_FILES_PATH}${DEB_PATTERN}'"
         else
@@ -240,13 +179,11 @@ jobs:
               --file "${i}"
           done
         fi
-
         echo "Finalizing release (removing draft status)..."
         github-release edit \
           --tag "${RELEASE_TAG_NAME}" \
           --name "${RELEASE_TITLE}" \
           --description "${DESCRIPTION_TEXT}"
-
         if [ ${#DEB_FILES[@]} -gt 0 ]; then
           echo "Removing uploaded .deb files from build workspace..."
           rm -f "${DEB_FILES[@]}"

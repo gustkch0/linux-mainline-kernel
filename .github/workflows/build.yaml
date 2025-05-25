@@ -1,7 +1,7 @@
 on: [push]
 
 env:
-  RELEASE_START: 1650
+  RELEASE_START: 1600
   TARGET_ARCH: arm64
   CROSS_COMPILE_PREFIX: aarch64-linux-gnu-
 
@@ -17,15 +17,19 @@ jobs:
 
     - name: Install build dependencies and github-release
       run: |
+        # Add arm64 architecture for multiarch support
+        sudo dpkg --add-architecture arm64
         sudo apt-get -y update
+
+        # Install build dependencies
+        # For dependencies required by dpkg-buildpackage for the target (arm64), specify :arm64
+        # For host tools, no :arch qualifier is needed (they'll be amd64)
         sudo apt-get -y install \
           crossbuild-essential-arm64 \
           ccache \
           bc \
-          libssl-dev \
           bison \
           flex \
-          libelf-dev \
           kmod \
           curl \
           jq \
@@ -33,7 +37,13 @@ jobs:
           git \
           wget \
           xz-utils \
-          dwarves
+          dwarves \
+          libssl-dev \
+          libelf-dev \
+          libssl-dev:arm64 \
+          libelf-dev:arm64
+          # Native libssl-dev and libelf-dev are also kept in case any host tools need them,
+          # though usually, the :arm64 versions are what dpkg-buildpackage will check for.
 
         echo "Installing github-release..."
         GH_RELEASE_LATEST_URL=$(curl -sL https://api.github.com/repos/github-release/github-release/releases/latest | jq -r '.assets[] | select(.name | test("linux-amd64-github-release.bz2$")) | .browser_download_url')
@@ -56,25 +66,18 @@ jobs:
     - name: Reset ccache statistics
       run: ccache -z
 
-    # MOVED THIS STEP UP: Patch dev.mk *before* it's used by 'Prepare Release Information'
     - name: Patch dev.mk to use correct HOSTCC
       run: |
         if [ -f "dev.mk" ]; then
           echo "Attempting to patch dev.mk to set HOSTCC=gcc for KERNEL_MAKE..."
-          # This sed command targets the HOSTCC line within the KERNEL_MAKE definition.
           if sed -i 's|^\(\s*HOSTCC=\)aarch64-linux-gnu-gcc\(.*\)|\1gcc\2|' dev.mk; then
             echo "Successfully patched dev.mk. Verifying patch:"
             grep "HOSTCC=" dev.mk || echo "HOSTCC line not found after patch."
           else
             echo "sed command failed to patch dev.mk. Build might fail."
           fi
-          echo "--- Patched dev.mk content (relevant part) ---"
-          grep -A 4 -B 4 "KERNEL_MAKE" dev.mk || cat dev.mk
-          echo "--- End Patched dev.mk content ---"
         else
           echo "dev.mk not found in the current directory ($(pwd)), skipping patch."
-          # If dev.mk is critical and not found, you might want to fail here:
-          # exit 1
         fi
 
     - name: Prepare Release Information
@@ -84,23 +87,12 @@ jobs:
         echo "RELEASE_NUMBER=${RELEASE_NUMBER}" >> $GITHUB_OUTPUT
 
         if [ -f "./dev-make" ] && [ ! -x "./dev-make" ]; then chmod +x ./dev-make; fi
-        # dev.mk should now be patched if it existed.
 
-        # Capture RELEASE_TAG_NAME
-        # The 'version' target in dev.mk is: @echo "$(KDEB_PKGVERSION)"
-        # KERNEL_VERSION = $(shell $(KERNEL_MAKE) -s kernelversion)
-        # 'make -s kernelversion' is usually clean.
         _tag_name_full_output=$(./dev-make version)
-        # Get the last non-empty line
         _tag_name_value=$(echo "${_tag_name_full_output}" | sed '/^\s*$/d' | tail -n 1)
         echo "RELEASE_TAG_NAME=${_tag_name_value}" >> $GITHUB_OUTPUT
 
-        # Capture DEB_INFO_PATTERN
-        # The 'info' target in dev.mk is: @echo $(KERNEL_RELEASE)
-        # KERNEL_RELEASE = $(shell $(KERNEL_MAKE) -s kernelrelease)
-        # This is the one that produced multi-line output.
         _deb_info_full_output=$(./dev-make info)
-        # Get the last non-empty line
         _deb_info_value=$(echo "${_deb_info_full_output}" | sed '/^\s*$/d' | tail -n 1)
         echo "DEB_INFO_PATTERN=${_deb_info_value}" >> $GITHUB_OUTPUT
 
@@ -114,7 +106,6 @@ jobs:
         echo "Processed DEB_INFO_PATTERN (last non-empty line): ${_deb_info_value}"
         echo "--- End Debug: Release Information ---"
 
-        # Verify that the values are not empty
         if [ -z "${_tag_name_value}" ]; then
           echo "::error::RELEASE_TAG_NAME is empty after processing. Full output was: ${_tag_name_full_output}"
           exit 1
@@ -144,7 +135,6 @@ jobs:
         RELEASE: ${{ steps.prep_release.outputs.RELEASE_NUMBER }}
         QEMU_LD_PREFIX: /usr/aarch64-linux-gnu
       run: |
-        sudo apt install -y build-essential:native debhelper-compat libssl-dev
         echo "Starting build with ARCH=$ARCH CROSS_COMPILE=$CROSS_COMPILE RELEASE=$RELEASE QEMU_LD_PREFIX=$QEMU_LD_PREFIX"
         ./dev-make kernel-package
 

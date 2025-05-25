@@ -1,7 +1,7 @@
 on: [push]
 
 env:
-  RELEASE_START: 1600 # 1150, as this is latest build by GitLab CI
+  RELEASE_START: 1600
   TARGET_ARCH: arm64
   CROSS_COMPILE_PREFIX: aarch64-linux-gnu-
 
@@ -33,7 +33,7 @@ jobs:
           git \
           wget \
           xz-utils \
-          dwarves # pahole is part of dwarves on modern Ubuntu
+          dwarves
 
         echo "Installing github-release..."
         GH_RELEASE_LATEST_URL=$(curl -sL https://api.github.com/repos/github-release/github-release/releases/latest | jq -r '.assets[] | select(.name | test("linux-amd64-github-release.bz2$")) | .browser_download_url')
@@ -49,7 +49,7 @@ jobs:
     - name: Configure ccache
       run: |
         echo "CCACHE_DIR=${{ runner.temp }}/ccache" >> $GITHUB_ENV
-        echo "PATH=/usr/lib/ccache:$PATH" >> $GITHUB_ENV # Ensure ccache is in PATH
+        echo "PATH=/usr/lib/ccache:$PATH" >> $GITHUB_ENV
         ccache -M 10G
         ccache -o compression=true
 
@@ -63,6 +63,9 @@ jobs:
         echo "RELEASE_NUMBER=${RELEASE_NUMBER}" >> $GITHUB_OUTPUT
 
         if [ -f "./dev-make" ] && [ ! -x "./dev-make" ]; then chmod +x ./dev-make; fi
+        # Assuming dev.mk is the makefile used by dev-make
+        if [ -f "./dev.mk" ] && [ ! -x "./dev.mk" ]; then chmod +x ./dev.mk; fi
+
 
         RELEASE_TAG_NAME=$(./dev-make version)
         echo "RELEASE_TAG_NAME=${RELEASE_TAG_NAME}" >> $GITHUB_OUTPUT
@@ -74,19 +77,55 @@ jobs:
         echo "Calculated RELEASE_TAG_NAME: ${RELEASE_TAG_NAME}"
         echo "Calculated DEB_INFO_PATTERN: ${DEB_INFO_PATTERN}"
 
+    - name: Check AArch64 linker and QEMU_LD_PREFIX (for debugging)
+      env:
+        QEMU_LD_PREFIX: /usr/aarch64-linux-gnu
+      run: |
+        echo "--- Debug Information ---"
+        echo "QEMU_LD_PREFIX is set to: $QEMU_LD_PREFIX"
+        echo "Searching for ld-linux-aarch64.so.1 under $QEMU_LD_PREFIX..."
+        if [ -f "$QEMU_LD_PREFIX/lib/ld-linux-aarch64.so.1" ]; then
+          echo "Found linker: $QEMU_LD_PREFIX/lib/ld-linux-aarch64.so.1"
+          ls -l "$QEMU_LD_PREFIX/lib/ld-linux-aarch64.so.1"
+        else
+          echo "Linker NOT FOUND at $QEMU_LD_PREFIX/lib/ld-linux-aarch64.so.1"
+        fi
+        echo "Full search for ld-linux-aarch64.so.1 in /usr:"
+        find /usr -name "ld-linux-aarch64.so.1" -ls 2>/dev/null || echo "Linker not found anywhere in /usr via find."
+        echo "--- End Debug Information ---"
+
+    - name: Patch dev.mk to use correct HOSTCC
+      run: |
+        if [ -f "dev.mk" ]; then
+          echo "Attempting to patch dev.mk to set HOSTCC=gcc for KERNEL_MAKE..."
+          # This sed command targets the HOSTCC line within the KERNEL_MAKE definition.
+          # It replaces 'HOSTCC=aarch64-linux-gnu-gcc' with 'HOSTCC=gcc', preserving the rest of the line.
+          # It assumes HOSTCC is on its own line possibly followed by a backslash.
+          if sed -i 's|^\(\s*HOSTCC=\)aarch64-linux-gnu-gcc\(.*\)|\1gcc\2|' dev.mk; then
+            echo "Successfully patched dev.mk. Verifying patch:"
+            grep "HOSTCC=" dev.mk || echo "HOSTCC line not found after patch."
+          else
+            echo "sed command failed to patch dev.mk. Build might fail."
+          fi
+          echo "--- Patched dev.mk content (relevant part) ---"
+          grep -A 4 -B 4 "KERNEL_MAKE" dev.mk || cat dev.mk
+          echo "--- End Patched dev.mk content ---"
+        else
+          echo "dev.mk not found in the current directory ($(pwd)), skipping patch. The build will likely fail if HOSTCC is misconfigured."
+          ls -la
+          exit 1 # Fail early if dev.mk is not found, as it's critical
+        fi
+
     - name: Build package (cross-compiling for aarch64)
       env:
         ARCH: ${{ env.TARGET_ARCH }}
         CROSS_COMPILE: ${{ env.CROSS_COMPILE_PREFIX }}
         RELEASE: ${{ steps.prep_release.outputs.RELEASE_NUMBER }}
-        # Add QEMU_LD_PREFIX here
+        # QEMU_LD_PREFIX is still useful if any *other* arm64 binaries are run via QEMU.
         QEMU_LD_PREFIX: /usr/aarch64-linux-gnu
       run: |
         echo "Starting build with ARCH=$ARCH CROSS_COMPILE=$CROSS_COMPILE RELEASE=$RELEASE QEMU_LD_PREFIX=$QEMU_LD_PREFIX"
-        # The ./dev-make script must be capable of handling these cross-compilation env vars
-        # The kernel build system will try to run some host tools.
-        # If these host tools (like fixdep) are compiled for arm64 (due to ARCH/CROSS_COMPILE),
-        # QEMU will be invoked to run them. QEMU_LD_PREFIX tells QEMU where to find arm64 libs.
+        # With dev.mk patched, HOSTCC should be 'gcc', making fixdep a native binary.
         ./dev-make kernel-package
 
     - name: Display ccache statistics

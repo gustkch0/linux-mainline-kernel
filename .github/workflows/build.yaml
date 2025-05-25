@@ -39,9 +39,10 @@ jobs:
           git \
           wget \
           xz-utils \
+          dwarves
           # Add dwarves for BTF generation if your kernel needs it (often does for modern kernels)
           # On Ubuntu 22.04+, 'dwarves' package should provide 'pahole'
-          dwarves
+
         
         # Install github-release tool
         echo "Installing github-release..."

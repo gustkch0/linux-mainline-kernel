@@ -36,33 +36,33 @@ kernel-menuconfig:
 
 .PHONY: kernel-image
 kernel-image: .config
-        $(KERNEL_MAKE) Image dtbs -j$$(nproc)
+	$(KERNEL_MAKE) Image dtbs -j$$(nproc)
 
 .PHONY: kernel-modules
 kernel-image-and-modules: .config
 	$(KERNEL_MAKE) Image modules dtbs -j$$(nproc)
-        $(KERNEL_MAKE) modules_install INSTALL_MOD_PATH=$(CURDIR)/out/linux_modules
+	$(KERNEL_MAKE) modules_install INSTALL_MOD_PATH=$(CURDIR)/out/linux_modules
 
 .PHONY: kernel-package
 kernel-package: .config
-        KDEB_PKGVERSION=$(KDEB_PKGVERSION) $(KERNEL_MAKE) bindeb-pkg -j$$(nproc)
+	KDEB_PKGVERSION=$(KDEB_PKGVERSION) $(KERNEL_MAKE) bindeb-pkg -j$$(nproc)
 
 REMOTE_DIR ?= root@$(REMOTE_HOST):
 
 .PHONY: kernel-update-modules
 kernel-update-modules: .config
-        $(KERNEL_MAKE) modules -j$$(nproc)
-        $(KERNEL_MAKE) modules_install INSTALL_MOD_PATH=$(CURDIR)/out/linux_modules
-        rsync --partial --checksum -av out/linux_modules/lib/modules/$(KERNEL_RELEASE) $(REMOTE_DIR)/lib/modules
+	$(KERNEL_MAKE) modules -j$$(nproc)
+	$(KERNEL_MAKE) modules_install INSTALL_MOD_PATH=$(CURDIR)/out/linux_modules
+	rsync --partial --checksum -av out/linux_modules/lib/modules/$(KERNEL_RELEASE) $(REMOTE_DIR)/lib/modules
 
 .PHONY: kernel-update-dts
 kernel-update-dts: .config
-        $(KERNEL_MAKE) dtbs -j$$(nproc)
-        rsync --partial --checksum --include="*.dtb" -rv arch/arm64/boot/dts/rockchip $(REMOTE_DIR)/boot/dtbs/$(KERNEL_RELEASE)
+	$(KERNEL_MAKE) dtbs -j$$(nproc)
+	rsync --partial --checksum --include="*.dtb" -rv arch/arm64/boot/dts/rockchip $(REMOTE_DIR)/boot/dtbs/$(KERNEL_RELEASE)
 
 .PHONY: kernel-update
 kernel-update-image:
-        rsync --partial --checksum -rv arch/arm64/boot/Image $(REMOTE_DIR)/boot/vmlinuz-$(KERNEL_RELEASE)
-        rsync --partial --checksum --include="*.dtb" -rv arch/arm64/boot/dts/rockchip $(REMOTE_DIR)/boot/dtbs/$(KERNEL_RELEASE)
-        rsync --partial --checksum -av out/linux_modules/lib/modules/$(KERNEL_RELEASE) $(REMOTE_DIR)/lib/modules
+	rsync --partial --checksum -rv arch/arm64/boot/Image $(REMOTE_DIR)/boot/vmlinuz-$(KERNEL_RELEASE)
+	rsync --partial --checksum --include="*.dtb" -rv arch/arm64/boot/dts/rockchip $(REMOTE_DIR)/boot/dtbs/$(KERNEL_RELEASE)
+	rsync --partial --checksum -av out/linux_modules/lib/modules/$(KERNEL_RELEASE) $(REMOTE_DIR)/lib/modules
 

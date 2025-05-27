@@ -40,7 +40,7 @@ kernel-image: .config
 
 .PHONY: kernel-modules
 kernel-image-and-modules: .config
-        $(KERNEL_MAKE) Image modules dtbs -j$$(nproc)
+	$(KERNEL_MAKE) Image modules dtbs -j$$(nproc)
         $(KERNEL_MAKE) modules_install INSTALL_MOD_PATH=$(CURDIR)/out/linux_modules
 
 .PHONY: kernel-package

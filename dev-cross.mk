@@ -18,21 +18,21 @@ KERNEL_MAKE ?= make -j$$(nproc) \
         LOCALVERSION=$(LOCALVERSION)
 
 .config: arch/arm64/configs/$(KERNEL_DEFCONFIG)
-        $(KERNEL_MAKE) $(KERNEL_DEFCONFIG)
+	$(KERNEL_MAKE) $(KERNEL_DEFCONFIG)
 
 version:
-        @echo "$(KDEB_PKGVERSION)"
+	@echo "$(KDEB_PKGVERSION)"
 
 .PHONY: info
 info: .config
-        @echo $(KERNEL_RELEASE)
+	@echo $(KERNEL_RELEASE)
 
 .PHONY: kernel-menuconfig
 kernel-menuconfig:
-        $(KERNEL_MAKE) $(KERNEL_DEFCONFIG)
-        $(KERNEL_MAKE) HOSTCC=gcc menuconfig
-        $(KERNEL_MAKE) savedefconfig
-        mv defconfig arch/arm64/configs/$(KERNEL_DEFCONFIG)
+	$(KERNEL_MAKE) $(KERNEL_DEFCONFIG)
+	$(KERNEL_MAKE) HOSTCC=gcc menuconfig
+	$(KERNEL_MAKE) savedefconfig
+	mv defconfig arch/arm64/configs/$(KERNEL_DEFCONFIG)
 
 .PHONY: kernel-image
 kernel-image: .config
@@ -65,3 +65,4 @@ kernel-update-image:
         rsync --partial --checksum -rv arch/arm64/boot/Image $(REMOTE_DIR)/boot/vmlinuz-$(KERNEL_RELEASE)
         rsync --partial --checksum --include="*.dtb" -rv arch/arm64/boot/dts/rockchip $(REMOTE_DIR)/boot/dtbs/$(KERNEL_RELEASE)
         rsync --partial --checksum -av out/linux_modules/lib/modules/$(KERNEL_RELEASE) $(REMOTE_DIR)/lib/modules
+

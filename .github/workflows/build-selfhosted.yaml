@@ -87,7 +87,6 @@ jobs:
         curl -sL "$GH_RELEASE_LATEST_URL" | bzcat > github-release
         chmod +x github-release
         sudo mv github-release /usr/local/bin/
-        echo "github-release installed: $(github-release -V)"
     - name: Configure ccache
       run: |
         echo "CCACHE_DIR=${{ runner.temp }}/ccache" >> $GITHUB_ENV

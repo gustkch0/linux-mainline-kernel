@@ -179,12 +179,15 @@ jobs:
       run: |
         sudo apt install -y build-essential:native debhelper-compat libssl-dev
         echo "Starting build with ARCH=$ARCH CROSS_COMPILE=$CROSS_COMPILE RELEASE=$RELEASE QEMU_LD_PREFIX=$QEMU_LD_PREFIX"
-        ./dev-make-cross kernel-package
+
     - name: Display ccache statistics
       run: ccache -s
       
     - name: Build package
       env:
+        ARCH: ${{ env.TARGET_ARCH }}
+        CROSS_COMPILE: ${{ env.CROSS_COMPILE_PREFIX }}
+        QEMU_LD_PREFIX: /usr/aarch64-linux-gnu
         GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         RELEASE: ${{ steps.prep_release.outputs.RELEASE_TAG_NAME }}
       run: |
@@ -194,16 +197,29 @@ jobs:
         git config --global user.name "gustkch0"
         git config --global user.email "gustavokch@gmail.com"
         export RELEASE=$(($RELEASE_START+$GITHUB_RUN_NUMBER))
+        export RELEASE_1=$(($RELEASE_START+$GITHUB_RUN_NUMBER+1))
+        ./dev-make-cross kernel-image-and-modules
         ./dev-make-cross kernel-package
         export RELEASE_NAME="$(./dev-make-cross version)"
         export RELEASE_TITLE="$(./dev-make-cross version)"
+        sudo mkdir -p ./boot/dtbs
+        sudo mkdir -p ./lib/modules
+        sudo rsync --partial --checksum -rv arch/arm64/boot/Image ./boot/vmlinuz-$(KERNEL_RELEASE)
+        sudo rsync --partial --checksum --include="*.dtb" -rv arch/arm64/boot/dts/rockchip ./boot/dtbs/$(KERNEL_RELEASE)
+        sudo rsync --partial --checksum -av out/linux_modules/lib/modules/$(KERNEL_RELEASE) ./lib/modules
+        tar -czvf boot.tar.gz ./boot
+        tar -czvf modules.tar.gz ./lib/modules
+        tar -czvf release.tar.gz boot.tar.gz modules.tar.gz
         export DESCRIPTION="$GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID"
         sudo find ../ -type f -name "*.deb" > deb
         export DEB=$(cat deb)
+        export TAR=$(cat tar)
+        sudo find ../ -type f -name "release.tar.gz" > tar
         echo $RELEASE
         echo $RELEASE_TITLE
         echo $RELEASE_NAME
         gh release create --title $RELEASE_TITLE --generate-notes -R https://github.com/gustkch0/linux-mainline-kernel $RELEASE $DEB
+        gh release create --title $RELEASE_TITLE --generate-notes -R https://github.com/gustkch0/linux-mainline-kernel $RELEASE $TAR
         
     - name: Upload Artifact
       uses: actions/upload-artifact@v4

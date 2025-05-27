@@ -22,6 +22,7 @@ jobs:
           build-essential \
           crossbuild-essential-arm64 \
           ccache \
+          rsync \
           bc \
           libssl-dev \
           bison \
@@ -91,43 +92,43 @@ jobs:
       run: |
         echo "CCACHE_DIR=${{ runner.temp }}/ccache" >> $GITHUB_ENV
         echo "PATH=/usr/lib/ccache:$PATH" >> $GITHUB_ENV
-        ccache -M 10G
+        ccache -M 20G
         ccache -o compression=true
     - name: Reset ccache statistics
       run: ccache -z
 
     # MOVED THIS STEP UP: Patch dev.mk *before* it's used by 'Prepare Release Information'
-    - name: Patch dev.mk to use correct HOSTCC
-      run: |
-        if [ -f "dev.mk" ]; then
-          echo "Attempting to patch dev.mk to set HOSTCC=gcc for KERNEL_MAKE..."
-          # This sed command targets the HOSTCC line within the KERNEL_MAKE definition.
-          if sed -i 's|^\(\s*HOSTCC=\)aarch64-linux-gnu-gcc\(.*\)|\1gcc\2|' dev.mk; then
-            echo "Successfully patched dev.mk. Verifying patch:"
-            grep "HOSTCC=" dev.mk || echo "HOSTCC line not found after patch."
-          else
-            echo "sed command failed to patch dev.mk. Build might fail."
-          fi
-          echo "--- Patched dev.mk content (relevant part) ---"
-          grep -A 4 -B 4 "KERNEL_MAKE" dev.mk || cat dev.mk
-          echo "--- End Patched dev.mk content ---"
-        else
-          echo "dev.mk not found in the current directory ($(pwd)), skipping patch."
-          # If dev.mk is critical and not found, you might want to fail here:
-          # exit 1
-        fi
+#    - name: Patch dev.mk to use correct HOSTCC
+#      run: |
+#        if [ -f "dev.mk" ]; then
+#          echo "Attempting to patch dev.mk to set HOSTCC=gcc for KERNEL_MAKE..."
+#          # This sed command targets the HOSTCC line within the KERNEL_MAKE definition.
+#          if sed -i 's|^\(\s*HOSTCC=\)aarch64-linux-gnu-gcc\(.*\)|\1gcc\2|' dev.mk; then
+#            echo "Successfully patched dev.mk. Verifying patch:"
+#           grep "HOSTCC=" dev.mk || echo "HOSTCC line not found after patch."
+#          else
+#            echo "sed command failed to patch dev.mk. Build might fail."
+#          fi
+#          echo "--- Patched dev.mk content (relevant part) ---"
+#          grep -A 4 -B 4 "KERNEL_MAKE" dev.mk || cat dev.mk
+#          echo "--- End Patched dev.mk content ---"
+#        else
+#          echo "dev.mk not found in the current directory ($(pwd)), skipping patch."
+#          # If dev.mk is critical and not found, you might want to fail here:
+#          # exit 1
+#        fi
     - name: Prepare Release Information
       id: prep_release
       run: |
         RELEASE_NUMBER=$((${{ env.RELEASE_START }} + $GITHUB_RUN_NUMBER))
         echo "RELEASE_NUMBER=${RELEASE_NUMBER}" >> $GITHUB_OUTPUT
-        if [ -f "./dev-make" ] && [ ! -x "./dev-make" ]; then chmod +x ./dev-make; fi
+        if [ -f "./dev-make-cross" ] && [ ! -x "./dev-make-cross" ]; then chmod +x ./dev-make-cross; fi
         # dev.mk should now be patched if it existed.
         # Capture RELEASE_TAG_NAME
         # The 'version' target in dev.mk is: @echo "$(KDEB_PKGVERSION)"
         # KERNEL_VERSION = $(shell $(KERNEL_MAKE) -s kernelversion)
         # 'make -s kernelversion' is usually clean.
-        _tag_name_full_output=$(./dev-make version)
+        _tag_name_full_output=$(./dev-make-cross version)
         # Get the last non-empty line
         _tag_name_value=$(echo "${_tag_name_full_output}" | sed '/^\s*$/d' | tail -n 1)
         echo "RELEASE_TAG_NAME=${_tag_name_value}" >> $GITHUB_OUTPUT
@@ -135,16 +136,16 @@ jobs:
         # The 'info' target in dev.mk is: @echo $(KERNEL_RELEASE)
         # KERNEL_RELEASE = $(shell $(KERNEL_MAKE) -s kernelrelease)
         # This is the one that produced multi-line output.
-        _deb_info_full_output=$(./dev-make info)
+        _deb_info_full_output=$(./dev-make-cross info)
         # Get the last non-empty line
         _deb_info_value=$(echo "${_deb_info_full_output}" | sed '/^\s*$/d' | tail -n 1)
         echo "DEB_INFO_PATTERN=${_deb_info_value}" >> $GITHUB_OUTPUT
         echo "--- Debug: Release Information ---"
         echo "Calculated RELEASE_NUMBER: ${RELEASE_NUMBER}"
-        echo "Original output from './dev-make version':"
+        echo "Original output from './dev-make-cross version':"
         echo "${_tag_name_full_output}"
         echo "Processed RELEASE_TAG_NAME (last non-empty line): ${_tag_name_value}"
-        echo "Original output from './dev-make info':"
+        echo "Original output from './dev-make-cross info':"
         echo "${_deb_info_full_output}"
         echo "Processed DEB_INFO_PATTERN (last non-empty line): ${_deb_info_value}"
         echo "--- End Debug: Release Information ---"
@@ -178,7 +179,7 @@ jobs:
       run: |
         sudo apt install -y build-essential:native debhelper-compat libssl-dev
         echo "Starting build with ARCH=$ARCH CROSS_COMPILE=$CROSS_COMPILE RELEASE=$RELEASE QEMU_LD_PREFIX=$QEMU_LD_PREFIX"
-        ./dev-make kernel-package
+        ./dev-make-cross kernel-package
     - name: Display ccache statistics
       run: ccache -s
       
@@ -191,9 +192,9 @@ jobs:
         git config --global --add safe.directory "/__w/linux-mainline-kernel/linux-mainline-kernel"
         git config --global --add safe.directory "/__w/linux-rockchip/linux-rockchip"        
         export RELEASE=$(($RELEASE_START+$GITHUB_RUN_NUMBER))
-        ./dev-make kernel-package
-        export RELEASE_NAME="$(./dev-make version)"
-        export RELEASE_TITLE="$(./dev-make version)"
+        ./dev-make-cross kernel-package
+        export RELEASE_NAME="$(./dev-make-cross version)"
+        export RELEASE_TITLE="$(./dev-make-cross version)"
         export DESCRIPTION="$GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID"
         sudo find . -type f -name "*.deb" > deb
         export DEB=$(cat deb)

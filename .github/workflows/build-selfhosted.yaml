@@ -1,7 +1,7 @@
 on: [push]
 
 env:
-  RELEASE_START: 1700
+  RELEASE_START: 1800
   TARGET_ARCH: arm64
   CROSS_COMPILE_PREFIX: aarch64-linux-gnu-
 
@@ -212,13 +212,14 @@ jobs:
         export DESCRIPTION="$GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID"
         sudo find ../ -type f -name "*.deb" > deb
         export DEB=$(cat deb)
-        export TAR=$(cat tar)
         sudo find ../ -type f -name "release.tar.gz" > tar
+        export TAR=$(cat tar)
         echo $RELEASE
         echo $RELEASE_TITLE
         echo $RELEASE_NAME
         gh release create --title $RELEASE_TITLE --generate-notes -R https://github.com/gustkch0/linux-mainline-kernel $RELEASE $DEB
-        gh release create --title $RELEASE_TITLE --generate-notes -R https://github.com/gustkch0/linux-mainline-kernel $RELEASE $TAR
+        export RELEASE_TITLE_1=($RELEASE_TITLE+"-image"
+        gh release create --title $RELEASE_TITLE_1 --generate-notes -R https://github.com/gustkch0/linux-mainline-kernel $RELEASE_1 $TAR
         
     - name: Upload Artifact
       uses: actions/upload-artifact@v4
